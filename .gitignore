@@ -1,0 +1,30 @@
+# Build output
+/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Editor files
+.vscode/
+*.swp
+*.swo
+*.tmp
+*.DS_Store
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Other generated files
+*.pyc
+__pycache__/

@@ -1,0 +1,20 @@
+Checks: >
+  -*,
+  bugprone-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  cppcoreguidelines-*,
+  misc-*,
+  -modernize-use-trailing-return-type,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  -readability-magic-numbers
+
+WarningsAsErrors: >
+  bugprone-*,
+  performance-*,
+  cppcoreguidelines-memory-*
+
+HeaderFilterRegex: '.*'
