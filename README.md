@@ -65,5 +65,5 @@ ctest --output-on-failure
 ```
 or run the test executable directly:
 ```bash
-./build/test_http_parser
+./build/tokoro_tests
 ```

@@ -58,10 +58,19 @@ FetchContent_MakeAvailable(Catch2)
 
 enable_testing()
 
-add_executable(test_http_parser tests/test_http_parser.cpp src/http_parser.cpp)
-target_include_directories(test_http_parser PRIVATE src)
-target_link_libraries(test_http_parser PRIVATE Catch2::Catch2WithMain)
+set(TEST_SOURCES
+    tests/test_http_parser.cpp
+    tests/test_thread_pool.cpp
+    tests/test_socket.cpp
+    src/http_parser.cpp
+    src/thread_pool.cpp
+    src/socket.cpp
+)
+
+add_executable(tokoro_tests ${TEST_SOURCES})
+target_include_directories(tokoro_tests PRIVATE src)
+target_link_libraries(tokoro_tests PRIVATE Catch2::Catch2WithMain)
 
 # Add tests
 include(Catch)
-catch_discover_tests(test_http_parser)
+catch_discover_tests(tokoro_tests)

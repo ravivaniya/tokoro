@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 #include <sys/socket.h>
+#include <stdexcept>
 
 namespace tokoro {
 
@@ -9,23 +10,19 @@ Server::Server(uint16_t port)
     : port_(port), 
       thread_pool_(std::make_unique<ThreadPool>(std::thread::hardware_concurrency() > 0 ? std::thread::hardware_concurrency() : 4)) {
     if (!server_socket_.is_valid()) {
-        std::cerr << "Failed to create server socket.\n";
-        return;
+        throw std::runtime_error("Failed to create server socket.");
     }
 
     if (!server_socket_.set_reuse_address(true)) {
-        std::cerr << "Failed to set SO_REUSEADDR.\n";
-        return;
+        throw std::runtime_error("Failed to set SO_REUSEADDR.");
     }
 
     if (!server_socket_.bind(port_)) {
-        std::cerr << "Failed to bind server socket to port " << port_ << ".\n";
-        return;
+        throw std::runtime_error("Failed to bind server socket to port " + std::to_string(port_));
     }
 
     if (!server_socket_.listen()) {
-        std::cerr << "Failed to listen on server socket.\n";
-        return;
+        throw std::runtime_error("Failed to listen on server socket.");
     }
 
     std::cout << "Server initialized and listening on port " << port_ << "...\n";
