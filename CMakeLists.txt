@@ -46,11 +46,21 @@ set(SOURCES
 add_executable(tokoro ${SOURCES})
 target_include_directories(tokoro PRIVATE src)
 
-# Optional: Add testing support (FetchContent Catch2 for tests directory later)
-# include(FetchContent)
-# FetchContent_Declare(
-#   Catch2
-#   GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-#   GIT_TAG        v3.4.0
-# )
-# FetchContent_MakeAvailable(Catch2)
+# Add testing support via Catch2
+include(FetchContent)
+FetchContent_Declare(
+  Catch2
+  GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+  GIT_TAG        v3.4.0
+)
+FetchContent_MakeAvailable(Catch2)
+
+enable_testing()
+
+add_executable(test_http_parser tests/test_http_parser.cpp src/http_parser.cpp)
+target_include_directories(test_http_parser PRIVATE src)
+target_link_libraries(test_http_parser PRIVATE Catch2::Catch2WithMain)
+
+# Add tests
+include(Catch)
+catch_discover_tests(test_http_parser)

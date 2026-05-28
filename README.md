@@ -56,3 +56,14 @@ cmake ..
 cmake --build .
 ./tokoro
 ```
+
+### Running Tests
+To run the Catch2 unit tests:
+```bash
+cd build
+ctest --output-on-failure
+```
+or run the test executable directly:
+```bash
+./build/test_http_parser
+```

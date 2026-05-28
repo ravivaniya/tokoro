@@ -26,7 +26,21 @@ In Phase 1, the server employs a standard blocking accept-loop with a thread poo
 *Note: In Phase 3, this model will be replaced by an `epoll`-based event loop (reactor pattern) for non-blocking I/O.*
 
 ## 3. HTTP Parser State Machine (Phase 1)
-*(To be written)*
+The HTTP/1.1 parser is designed as an incremental state machine to accommodate non-blocking I/O (where data might arrive in partial chunks) and to avoid buffering the entire request before parsing.
+
+### States
+1. **RequestLineStart**: Waiting for the first non-whitespace character.
+2. **RequestLineMethod**: Reading the HTTP method until a space.
+3. **RequestLineUri**: Reading the URI until a space.
+4. **RequestLineVersion**: Reading the HTTP version until `\r\n`.
+5. **HeaderLineStart**: Reading the start of a header line. If `\r\n` is encountered immediately, transitions to `Body`.
+6. **HeaderName**: Reading a header field name until `:`.
+7. **HeaderValue**: Reading a header field value (skipping leading whitespace) until `\r\n`.
+8. **Body**: Reading the request body based on `Content-Length`. (Chunked transfer-encoding will be stubbed for Phase 1/Week 3).
+9. **Complete**: The request is fully parsed.
+10. **Error**: A malformed request or unsupported feature (like chunked encoding early on) was encountered.
+
+The parser will be developed using Test-Driven Development (TDD) to ensure strict adherence to RFC 7230 §3 and §4.
 
 ## 4. Keep-Alive & Timeouts (Phase 1)
 *(To be written)*
