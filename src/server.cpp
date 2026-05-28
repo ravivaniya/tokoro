@@ -5,7 +5,9 @@
 
 namespace tokoro {
 
-Server::Server(uint16_t port) : port_(port) {
+Server::Server(uint16_t port) 
+    : port_(port), 
+      thread_pool_(std::make_unique<ThreadPool>(std::thread::hardware_concurrency() > 0 ? std::thread::hardware_concurrency() : 4)) {
     if (!server_socket_.is_valid()) {
         std::cerr << "Failed to create server socket.\n";
         return;
@@ -43,15 +45,19 @@ void Server::run() {
         }
 
         std::cout << "Accepted new connection.\n";
-        handle_client(*client_opt);
+        
+        auto shared_client = std::make_shared<Socket>(std::move(*client_opt));
+        thread_pool_->enqueue([this, shared_client]() {
+            this->handle_client(shared_client);
+        });
     }
 }
 
-void Server::handle_client(Socket& client_socket) {
+void Server::handle_client(std::shared_ptr<Socket> client_socket) {
     std::vector<char> buffer(4096);
 
     while (true) {
-        ssize_t bytes_received = ::recv(client_socket.get(), buffer.data(), buffer.size(), 0);
+        ssize_t bytes_received = ::recv(client_socket->get(), buffer.data(), buffer.size(), 0);
 
         if (bytes_received < 0) {
             std::cerr << "Error receiving data.\n";
@@ -64,7 +70,7 @@ void Server::handle_client(Socket& client_socket) {
         std::cout << "Received " << bytes_received << " bytes.\n";
         
         // Echo back to the client
-        ssize_t bytes_sent = ::send(client_socket.get(), buffer.data(), static_cast<size_t>(bytes_received), 0);
+        ssize_t bytes_sent = ::send(client_socket->get(), buffer.data(), static_cast<size_t>(bytes_received), 0);
         if (bytes_sent < 0) {
             std::cerr << "Error sending data.\n";
             break;
