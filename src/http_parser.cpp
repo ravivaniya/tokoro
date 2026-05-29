@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <cctype>
 
+namespace tokoro {
+
 HttpParser::HttpParser() {
     reset();
 }
@@ -292,3 +294,5 @@ std::pair<ParseResult, size_t> HttpParser::parse(std::string_view data, HttpRequ
 
     return {(state_ == ParseState::Complete) ? ParseResult::Complete : (state_ == ParseState::Error ? ParseResult::Error : ParseResult::Pending), i};
 }
+
+} // namespace tokoro

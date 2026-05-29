@@ -1,14 +1,31 @@
 #include <iostream>
 #include <stdexcept>
+#include <csignal>
+#include <atomic>
 #include "server.hpp"
+#include "config.hpp"
 
-int main() {
-    std::cout << "Starting tokoro HTTP server...\n";
+std::atomic<bool> g_running{true};
 
-    uint16_t port = 8080;
+void signal_handler(int signal) {
+    if (signal == SIGINT || signal == SIGTERM) {
+        g_running = false;
+    }
+}
+
+int main(int argc, char** argv) {
     try {
-        tokoro::Server server(port);
-        server.run();
+        auto config_opt = tokoro::Config::parse(argc, argv);
+        if (!config_opt) {
+            return 0;
+        }
+
+        std::signal(SIGINT, signal_handler);
+        std::signal(SIGTERM, signal_handler);
+
+        std::cout << "Starting tokoro HTTP server...\n";
+        tokoro::Server server(*config_opt);
+        server.run(g_running);
     } catch (const std::exception& e) {
         std::cerr << "Fatal error: " << e.what() << "\n";
         return 1;

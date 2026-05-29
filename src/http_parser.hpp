@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <utility>
 
+namespace tokoro {
+
 enum class ParseState {
     RequestLineStart,
     RequestLineMethod,
@@ -65,3 +67,5 @@ private:
     bool is_tspecial(char c) const;
     bool is_digit(char c) const;
 };
+
+} // namespace tokoro
