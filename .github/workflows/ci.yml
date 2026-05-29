@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake g++ libcurl4-openssl-dev
+
+    - name: Configure CMake
+      run: cmake -B build -S .
+
+    - name: Build
+      run: cmake --build build -j $(nproc)
+
+    - name: Test
+      run: cd build && ctest --output-on-failure
+
+    - name: Smoke Test
+      run: |
+        ./build/tokoro &
+        TOKORO_PID=$!
+        sleep 2
+        curl -v -f http://localhost:8080/
+        kill $TOKORO_PID

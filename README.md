@@ -25,6 +25,9 @@ graph TD
     RW2 -->|HTTP Response| Client
 ```
 
+## Benchmarks (Phase 1)
+tokoro Phase 1 (raw HTTP/1.1) comfortably handles 1,000 concurrent connections, sustaining **~77,000 RPS** on Apple Silicon with a p99 latency of **~265ms** (using blocking I/O thread pool). See [docs/benchmarks.md](docs/benchmarks.md) for full methodology and results.
+
 ## Capability Comparison vs nginx
 
 | Capability                                                | nginx | tokoro (P2) | tokoro (P3) |
