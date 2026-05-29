@@ -14,6 +14,9 @@ void HttpParser::reset() {
     body_bytes_read_ = 0;
     current_chunk_size_ = 0;
     is_chunked_ = false;
+    current_request_line_bytes_ = 0;
+    current_header_line_bytes_ = 0;
+    headers_count_ = 0;
 }
 
 bool HttpParser::is_char(char c) const {
@@ -40,15 +43,21 @@ bool HttpParser::is_digit(char c) const {
     return c >= '0' && c <= '9';
 }
 
-ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
+std::pair<ParseResult, size_t> HttpParser::parse(std::string_view data, HttpRequest& req) {
     if (state_ == ParseState::Error) {
-        return ParseResult::Error;
+        return {ParseResult::Error, 0};
     }
     if (state_ == ParseState::Complete) {
-        return ParseResult::Complete;
+        return {ParseResult::Complete, 0};
     }
 
-    for (size_t i = 0; i < data.size(); ++i) {
+    size_t i = 0;
+    for (; i < data.size(); ++i) {
+        if (state_ >= ParseState::RequestLineStart && state_ <= ParseState::RequestLineVersion) {
+            if (++current_request_line_bytes_ > max_request_line_bytes_) { state_ = ParseState::Error; return {ParseResult::Error, i + 1}; }
+        } else if (state_ >= ParseState::HeaderLineStart && state_ <= ParseState::HeaderValue) {
+            if (++current_header_line_bytes_ > max_header_bytes_) { state_ = ParseState::Error; return {ParseResult::Error, i + 1}; }
+        }
         char c = data[i];
 
         switch (state_) {
@@ -58,7 +67,7 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     continue;
                 } else if (!is_char(c) || is_ctl(c) || is_tspecial(c)) {
                     state_ = ParseState::Error;
-                    return ParseResult::Error;
+                    return {ParseResult::Error, i + 1};
                 } else {
                     state_ = ParseState::RequestLineMethod;
                     req.method.push_back(c);
@@ -70,7 +79,7 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     state_ = ParseState::RequestLineUri;
                 } else if (!is_char(c) || is_ctl(c) || is_tspecial(c)) {
                     state_ = ParseState::Error;
-                    return ParseResult::Error;
+                    return {ParseResult::Error, i + 1};
                 } else {
                     req.method.push_back(c);
                 }
@@ -81,7 +90,7 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     state_ = ParseState::RequestLineVersion;
                 } else if (is_ctl(c)) {
                     state_ = ParseState::Error;
-                    return ParseResult::Error;
+                    return {ParseResult::Error, i + 1};
                 } else {
                     req.uri.push_back(c);
                 }
@@ -92,10 +101,16 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     // Expect \n next
                     continue;
                 } else if (c == '\n') {
+                    if (req.version.size() != 8 || req.version.substr(0, 5) != "HTTP/" ||
+                        !is_digit(req.version[5]) || req.version[6] != '.' || !is_digit(req.version[7])) {
+                        state_ = ParseState::Error;
+                        return {ParseResult::Error, i + 1};
+                    }
                     state_ = ParseState::HeaderLineStart;
+                    current_header_line_bytes_ = 0;
                 } else if (is_ctl(c)) {
                     state_ = ParseState::Error;
-                    return ParseResult::Error;
+                    return {ParseResult::Error, i + 1};
                 } else {
                     req.version.push_back(c);
                 }
@@ -108,17 +123,26 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                 } else if (c == '\n') {
                     // Headers done
                     // Check Content-Length or Transfer-Encoding
-                    auto it_cl = req.headers.find("Content-Length");
+                    auto it_cl = req.headers.find("content-length");
                     if (it_cl != req.headers.end()) {
-                        expected_body_length_ = std::stoull(it_cl->second);
+                        try {
+                            expected_body_length_ = std::stoull(it_cl->second);
+                            if (expected_body_length_ > max_body_bytes_) {
+                                state_ = ParseState::Error;
+                                return {ParseResult::Error, i + 1};
+                            }
+                        } catch (const std::exception&) {
+                            state_ = ParseState::Error;
+                            return {ParseResult::Error, i + 1};
+                        }
                     }
-                    auto it_te = req.headers.find("Transfer-Encoding");
+                    auto it_te = req.headers.find("transfer-encoding");
                     if (it_te != req.headers.end()) {
                         if (it_te->second.find("chunked") != std::string::npos) {
                             is_chunked_ = true;
                         } else {
                             state_ = ParseState::Error;
-                            return ParseResult::Error;
+                            return {ParseResult::Error, i + 1};
                         }
                     }
 
@@ -130,11 +154,11 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                         req.body.reserve(expected_body_length_);
                     } else {
                         state_ = ParseState::Complete;
-                        return ParseResult::Complete;
+                        return {ParseResult::Complete, i + 1};
                     }
                 } else if (!is_char(c) || is_ctl(c) || is_tspecial(c)) {
                     state_ = ParseState::Error;
-                    return ParseResult::Error;
+                    return {ParseResult::Error, i + 1};
                 } else {
                     current_header_name_.push_back(c);
                     state_ = ParseState::HeaderName;
@@ -146,7 +170,7 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     state_ = ParseState::HeaderValue;
                 } else if (!is_char(c) || is_ctl(c) || is_tspecial(c)) {
                     state_ = ParseState::Error;
-                    return ParseResult::Error;
+                    return {ParseResult::Error, i + 1};
                 } else {
                     current_header_name_.push_back(c);
                 }
@@ -166,10 +190,18 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                         current_header_value_.clear();
                     }
                     
+                    std::transform(current_header_name_.begin(), current_header_name_.end(), current_header_name_.begin(),
+                        [](unsigned char ch){ return std::tolower(ch); });
                     req.headers[current_header_name_] = current_header_value_;
                     current_header_name_.clear();
                     current_header_value_.clear();
+                    headers_count_++;
+                    if (headers_count_ > max_headers_) {
+                        state_ = ParseState::Error;
+                        return {ParseResult::Error, i + 1};
+                    }
                     state_ = ParseState::HeaderLineStart;
+                    current_header_line_bytes_ = 0;
                 } else {
                     current_header_value_.push_back(c);
                 }
@@ -180,7 +212,7 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                 body_bytes_read_++;
                 if (body_bytes_read_ >= expected_body_length_) {
                     state_ = ParseState::Complete;
-                    return ParseResult::Complete;
+                    return {ParseResult::Complete, i + 1};
                 }
                 break;
 
@@ -196,7 +228,7 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     else if (c >= 'A' && c <= 'F') val = c - 'A' + 10;
                     else {
                         state_ = ParseState::Error;
-                        return ParseResult::Error;
+                        return {ParseResult::Error, i + 1};
                     }
                     current_chunk_size_ = (current_chunk_size_ * 16) + val;
                 }
@@ -218,7 +250,7 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     }
                 } else {
                     state_ = ParseState::Error;
-                    return ParseResult::Error;
+                    return {ParseResult::Error, i + 1};
                 }
                 break;
 
@@ -238,7 +270,7 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     current_chunk_size_ = 0;
                 } else {
                     state_ = ParseState::Error;
-                    return ParseResult::Error;
+                    return {ParseResult::Error, i + 1};
                 }
                 break;
 
@@ -247,7 +279,7 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     // skip
                 } else if (c == '\n') {
                     state_ = ParseState::Complete;
-                    return ParseResult::Complete;
+                    return {ParseResult::Complete, i + 1};
                 }
                 // Simplified trailer parsing, ignore trailer contents until \r\n
                 break;
@@ -258,5 +290,5 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
         }
     }
 
-    return (state_ == ParseState::Complete) ? ParseResult::Complete : (state_ == ParseState::Error ? ParseResult::Error : ParseResult::Pending);
+    return {(state_ == ParseState::Complete) ? ParseResult::Complete : (state_ == ParseState::Error ? ParseResult::Error : ParseResult::Pending), i};
 }

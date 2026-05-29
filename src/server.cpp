@@ -88,25 +88,24 @@ void Server::handle_client(std::shared_ptr<Socket> client_socket) {
         std::string_view data_chunk(buffer.data(), bytes_received);
         
         while (!data_chunk.empty()) {
-            // we could parse chunk by chunk, but parse() right now consumes all data
-            // To handle pipelined requests properly, parse() should return how many bytes it consumed.
-            // For now, we assume one request per recv(), or that parse will stop at Complete.
-            // Wait, our parser stops and returns Complete, but doesn't tell us how much it consumed!
-            // Actually, we pass the whole chunk. If there's extra data, it gets lost right now.
-            // For this milestone, we'll just parse the chunk.
-
-            auto result = parser.parse(data_chunk, req);
+            auto [result, bytes_consumed] = parser.parse(data_chunk, req);
+            data_chunk = data_chunk.substr(bytes_consumed);
 
             if (result == ParseResult::Complete) {
                 HttpResponse res = FileHandler::handle_request(req);
                 std::string res_str = res.serialize();
 
-                ssize_t bytes_sent = ::send(client_socket->get(), res_str.c_str(), res_str.size(), 0);
-                if (bytes_sent < 0) {
-                    std::cerr << "Error sending data.\n";
-                    keep_alive = false;
-                    break;
+                ssize_t total_sent = 0;
+                while (total_sent < res_str.size()) {
+                    ssize_t bytes_sent = ::send(client_socket->get(), res_str.c_str() + total_sent, res_str.size() - total_sent, MSG_NOSIGNAL);
+                    if (bytes_sent < 0) {
+                        std::cerr << "Error sending data.\n";
+                        keep_alive = false;
+                        break;
+                    }
+                    total_sent += bytes_sent;
                 }
+                if (!keep_alive) break;
 
                 // Check keep-alive
                 keep_alive = false;
@@ -125,7 +124,7 @@ void Server::handle_client(std::shared_ptr<Socket> client_socket) {
 
                 parser.reset();
                 req.clear();
-                break; // handled request, break out of data_chunk loop and wait for next recv
+                continue;
             } else if (result == ParseResult::Error) {
                 std::cerr << "Parse error.\n";
                 // Send 400 Bad Request
@@ -133,7 +132,12 @@ void Server::handle_client(std::shared_ptr<Socket> client_socket) {
                 res.status_code = 400;
                 res.status_message = "Bad Request";
                 std::string res_str = res.serialize();
-                ::send(client_socket->get(), res_str.c_str(), res_str.size(), 0);
+                ssize_t total_sent = 0;
+                while (total_sent < res_str.size()) {
+                    ssize_t bytes_sent = ::send(client_socket->get(), res_str.c_str() + total_sent, res_str.size() - total_sent, MSG_NOSIGNAL);
+                    if (bytes_sent < 0) break;
+                    total_sent += bytes_sent;
+                }
                 keep_alive = false;
                 break;
             } else {

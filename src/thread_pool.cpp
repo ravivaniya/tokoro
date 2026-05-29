@@ -1,4 +1,5 @@
 #include "thread_pool.hpp"
+#include <iostream>
 
 namespace tokoro {
 
@@ -43,7 +44,13 @@ void ThreadPool::worker_loop() {
             tasks_.pop();
         }
 
-        task();
+        try {
+            task();
+        } catch (const std::exception& e) {
+            std::cerr << "Exception in worker thread: " << e.what() << "\n";
+        } catch (...) {
+            std::cerr << "Unknown exception in worker thread\n";
+        }
     }
 }
 
