@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include "http_parser.hpp"
 
+using namespace tokoro;
+
 TEST_CASE("HttpParser: Valid GET request", "[parser]") {
     HttpParser parser;
     HttpRequest req;

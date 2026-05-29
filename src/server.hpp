@@ -3,22 +3,24 @@
 
 #include "socket.hpp"
 #include "thread_pool.hpp"
+#include "config.hpp"
 #include <cstdint>
 #include <memory>
+#include <atomic>
 
 namespace tokoro {
 
 class Server {
 public:
-    explicit Server(uint16_t port);
+    explicit Server(const Config& config);
 
     // Starts the single-threaded accept loop
-    void run();
+    void run(std::atomic<bool>& running);
 
 private:
-    void handle_client(std::shared_ptr<Socket> client_socket);
+    void handle_client(Socket client_socket);
 
-    uint16_t port_;
+    Config config_;
     Socket server_socket_;
     std::unique_ptr<ThreadPool> thread_pool_;
 };

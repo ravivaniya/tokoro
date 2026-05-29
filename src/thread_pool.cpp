@@ -23,6 +23,9 @@ ThreadPool::~ThreadPool() {
 void ThreadPool::enqueue(std::function<void()> task) {
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (stop_) {
+            throw std::runtime_error("ThreadPool is stopped, cannot enqueue new tasks.");
+        }
         tasks_.push(std::move(task));
     }
     condition_.notify_one();

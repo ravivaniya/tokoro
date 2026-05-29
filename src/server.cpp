@@ -5,14 +5,16 @@
 #include <stdexcept>
 #include <sys/time.h>
 #include <cerrno>
+#include <poll.h>
+#include <fstream>
 #include "http_parser.hpp"
 #include "file_handler.hpp"
 
 namespace tokoro {
 
-Server::Server(uint16_t port) 
-    : port_(port), 
-      thread_pool_(std::make_unique<ThreadPool>(std::thread::hardware_concurrency() > 0 ? std::thread::hardware_concurrency() : 4)) {
+Server::Server(const Config& config) 
+    : config_(config), 
+      thread_pool_(std::make_unique<ThreadPool>(config_.workers)) {
     if (!server_socket_.is_valid()) {
         throw std::runtime_error("Failed to create server socket.");
     }
@@ -21,47 +23,65 @@ Server::Server(uint16_t port)
         throw std::runtime_error("Failed to set SO_REUSEADDR.");
     }
 
-    if (!server_socket_.bind(port_)) {
-        throw std::runtime_error("Failed to bind server socket to port " + std::to_string(port_));
+    if (!server_socket_.bind(config_.port)) {
+        throw std::runtime_error("Failed to bind server socket to port " + std::to_string(config_.port));
     }
 
-    if (!server_socket_.listen()) {
+    if (!server_socket_.listen(128)) {
         throw std::runtime_error("Failed to listen on server socket.");
     }
 
-    std::cout << "Server initialized and listening on port " << port_ << "...\n";
+    std::cout << "Server initialized and listening on port " << config_.port << "...\n";
 }
 
-void Server::run() {
+void Server::run(std::atomic<bool>& running) {
     if (!server_socket_.is_valid()) {
         std::cerr << "Server socket not valid, cannot run.\n";
         return;
     }
 
-    while (true) {
-        auto client_opt = server_socket_.accept();
-        if (!client_opt) {
-            std::cerr << "Failed to accept client connection.\n";
+    while (running.load(std::memory_order_relaxed)) {
+        struct pollfd pfd;
+        pfd.fd = server_socket_.get();
+        pfd.events = POLLIN;
+
+        int ret = ::poll(&pfd, 1, 500); // 500ms timeout
+        if (ret < 0) {
+            if (errno == EINTR) continue;
+            std::cerr << "poll error on listen socket\n";
+            break;
+        }
+
+        if (ret == 0) {
+            // timeout, check running flag again
             continue;
         }
 
-        std::cout << "Accepted new connection.\n";
-        
-        auto shared_client = std::make_shared<Socket>(std::move(*client_opt));
-        thread_pool_->enqueue([this, shared_client]() {
-            this->handle_client(shared_client);
-        });
+        if (pfd.revents & POLLIN) {
+            auto client_opt = server_socket_.accept();
+            if (!client_opt) {
+                std::cerr << "Failed to accept client connection.\n";
+                continue;
+            }
+
+            auto shared_client = std::make_shared<Socket>(std::move(*client_opt));
+            thread_pool_->enqueue([this, shared_client]() {
+                this->handle_client(std::move(*shared_client));
+            });
+        }
     }
+    std::cout << "Server shutting down...\n";
 }
 
-void Server::handle_client(std::shared_ptr<Socket> client_socket) {
-    // Set SO_RCVTIMEO
-    struct timeval tv;
-    tv.tv_sec = 5; // 5 seconds timeout
-    tv.tv_usec = 0;
-    if (setsockopt(client_socket->get(), SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-        std::cerr << "Error setting SO_RCVTIMEO\n";
-    }
+void Server::handle_client(Socket client_socket) {
+    auto set_timeout = [&](size_t ms) {
+        struct timeval tv;
+        tv.tv_sec = ms / 1000;
+        tv.tv_usec = (ms % 1000) * 1000;
+        ::setsockopt(client_socket.get(), SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    };
+
+    set_timeout(config_.header_timeout_ms);
 
     std::vector<char> buffer(4096);
     HttpParser parser;
@@ -70,18 +90,16 @@ void Server::handle_client(std::shared_ptr<Socket> client_socket) {
     bool keep_alive = true;
 
     while (keep_alive) {
-        ssize_t bytes_received = ::recv(client_socket->get(), buffer.data(), buffer.size(), 0);
+        ssize_t bytes_received = ::recv(client_socket.get(), buffer.data(), buffer.size(), 0);
 
         if (bytes_received < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 // Timeout
-                std::cout << "Connection timed out.\n";
             } else {
                 std::cerr << "Error receiving data.\n";
             }
             break;
         } else if (bytes_received == 0) {
-            std::cout << "Client disconnected.\n";
             break;
         }
 
@@ -92,22 +110,9 @@ void Server::handle_client(std::shared_ptr<Socket> client_socket) {
             data_chunk = data_chunk.substr(bytes_consumed);
 
             if (result == ParseResult::Complete) {
-                HttpResponse res = FileHandler::handle_request(req);
-                std::string res_str = res.serialize();
-
-                ssize_t total_sent = 0;
-                while (total_sent < res_str.size()) {
-                    ssize_t bytes_sent = ::send(client_socket->get(), res_str.c_str() + total_sent, res_str.size() - total_sent, MSG_NOSIGNAL);
-                    if (bytes_sent < 0) {
-                        std::cerr << "Error sending data.\n";
-                        keep_alive = false;
-                        break;
-                    }
-                    total_sent += bytes_sent;
-                }
-                if (!keep_alive) break;
-
-                // Check keep-alive
+                HttpResponse res = FileHandler::handle_request(req, config_.docroot);
+                
+                // Determine keep-alive
                 keep_alive = false;
                 if (req.version == "HTTP/1.1") {
                     keep_alive = true;
@@ -122,8 +127,53 @@ void Server::handle_client(std::shared_ptr<Socket> client_socket) {
                     }
                 }
 
+                if (keep_alive) {
+                    res.headers["Connection"] = "keep-alive";
+                } else {
+                    res.headers["Connection"] = "close";
+                }
+
+                std::string res_str = res.serialize();
+
+                ssize_t total_sent = 0;
+                while (total_sent < res_str.size()) {
+                    ssize_t bytes_sent = ::send(client_socket.get(), res_str.c_str() + total_sent, res_str.size() - total_sent, MSG_NOSIGNAL);
+                    if (bytes_sent < 0) {
+                        std::cerr << "Error sending data.\n";
+                        keep_alive = false;
+                        break;
+                    }
+                    total_sent += bytes_sent;
+                }
+
+                if (keep_alive && !res.file_path_to_send.empty()) {
+                    std::ifstream file(res.file_path_to_send, std::ios::binary);
+                    if (file) {
+                        char file_buf[65536];
+                        while (file.read(file_buf, sizeof(file_buf)) || file.gcount() > 0) {
+                            ssize_t chunk_sent = 0;
+                            ssize_t chunk_size = file.gcount();
+                            while (chunk_sent < chunk_size) {
+                                ssize_t sent = ::send(client_socket.get(), file_buf + chunk_sent, chunk_size - chunk_sent, MSG_NOSIGNAL);
+                                if (sent < 0) {
+                                    keep_alive = false;
+                                    break;
+                                }
+                                chunk_sent += sent;
+                            }
+                            if (!keep_alive) break;
+                        }
+                    } else {
+                        keep_alive = false;
+                    }
+                }
+                
+                if (!keep_alive) break;
+
                 parser.reset();
                 req.clear();
+                // Switch to keep-alive idle timeout
+                set_timeout(config_.keepalive_timeout_ms);
                 continue;
             } else if (result == ParseResult::Error) {
                 std::cerr << "Parse error.\n";
@@ -131,10 +181,13 @@ void Server::handle_client(std::shared_ptr<Socket> client_socket) {
                 HttpResponse res;
                 res.status_code = 400;
                 res.status_message = "Bad Request";
+                res.headers["Connection"] = "close";
+                res.headers["Server"] = "tokoro/1.0";
+                
                 std::string res_str = res.serialize();
                 ssize_t total_sent = 0;
                 while (total_sent < res_str.size()) {
-                    ssize_t bytes_sent = ::send(client_socket->get(), res_str.c_str() + total_sent, res_str.size() - total_sent, MSG_NOSIGNAL);
+                    ssize_t bytes_sent = ::send(client_socket.get(), res_str.c_str() + total_sent, res_str.size() - total_sent, MSG_NOSIGNAL);
                     if (bytes_sent < 0) break;
                     total_sent += bytes_sent;
                 }
