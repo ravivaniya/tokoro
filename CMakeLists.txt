@@ -44,6 +44,7 @@ set(SOURCES
     src/thread_pool.cpp
     src/http_parser.cpp
     src/file_handler.cpp
+    src/file_handler.cpp
 )
 
 add_executable(tokoro ${SOURCES})
@@ -62,9 +63,11 @@ enable_testing()
 
 set(TEST_SOURCES
     tests/test_http_parser.cpp
+    tests/test_file_handler.cpp
     tests/test_thread_pool.cpp
     tests/test_socket.cpp
     src/http_parser.cpp
+    src/file_handler.cpp
     src/thread_pool.cpp
     src/socket.cpp
 )
