@@ -13,6 +13,12 @@ enum class ParseState {
     HeaderName,
     HeaderValue,
     Body,
+    ChunkSize,
+    ChunkExtension,
+    ChunkSizeCRLF,
+    ChunkData,
+    ChunkDataCRLF,
+    ChunkTrailer,
     Complete,
     Error
 };
@@ -39,6 +45,8 @@ private:
     std::string current_header_value_;
     size_t expected_body_length_;
     size_t body_bytes_read_;
+    size_t current_chunk_size_;
+    bool is_chunked_;
 
     // Helper functions for parsing
     bool is_char(char c) const;

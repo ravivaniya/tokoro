@@ -71,11 +71,27 @@ TEST_CASE("HttpParser: Malformed request line", "[parser]") {
     REQUIRE(result == ParseResult::Error);
 }
 
-TEST_CASE("HttpParser: Chunked encoding stub", "[parser]") {
+TEST_CASE("HttpParser: Valid chunked encoding", "[parser]") {
     HttpParser parser;
     HttpRequest req;
     
-    std::string_view data = "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n0\r\n\r\n";
+    std::string_view data = "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n5\r\npedia\r\nF\r\n in \r\n\r\nchunks.\r\n0\r\n\r\n";
     auto result = parser.parse(data, req);
-    REQUIRE(result == ParseResult::Error);
+    REQUIRE(result == ParseResult::Complete);
+    REQUIRE(req.method == "POST");
+    
+    std::string body_str(req.body.begin(), req.body.end());
+    REQUIRE(body_str == "Wikipedia in \r\n\r\nchunks.");
+}
+
+TEST_CASE("HttpParser: Valid chunked encoding with extensions", "[parser]") {
+    HttpParser parser;
+    HttpRequest req;
+    
+    std::string_view data = "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4;ext=1\r\nWiki\r\n0\r\n\r\n";
+    auto result = parser.parse(data, req);
+    REQUIRE(result == ParseResult::Complete);
+    
+    std::string body_str(req.body.begin(), req.body.end());
+    REQUIRE(body_str == "Wiki");
 }

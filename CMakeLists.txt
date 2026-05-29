@@ -42,6 +42,8 @@ set(SOURCES
     src/socket.cpp
     src/server.cpp
     src/thread_pool.cpp
+    src/http_parser.cpp
+    src/file_handler.cpp
 )
 
 add_executable(tokoro ${SOURCES})

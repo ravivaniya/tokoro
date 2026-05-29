@@ -3,6 +3,10 @@
 #include <vector>
 #include <sys/socket.h>
 #include <stdexcept>
+#include <sys/time.h>
+#include <cerrno>
+#include "http_parser.hpp"
+#include "file_handler.hpp"
 
 namespace tokoro {
 
@@ -51,26 +55,91 @@ void Server::run() {
 }
 
 void Server::handle_client(std::shared_ptr<Socket> client_socket) {
-    std::vector<char> buffer(4096);
+    // Set SO_RCVTIMEO
+    struct timeval tv;
+    tv.tv_sec = 5; // 5 seconds timeout
+    tv.tv_usec = 0;
+    if (setsockopt(client_socket->get(), SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        std::cerr << "Error setting SO_RCVTIMEO\n";
+    }
 
-    while (true) {
+    std::vector<char> buffer(4096);
+    HttpParser parser;
+    HttpRequest req;
+
+    bool keep_alive = true;
+
+    while (keep_alive) {
         ssize_t bytes_received = ::recv(client_socket->get(), buffer.data(), buffer.size(), 0);
 
         if (bytes_received < 0) {
-            std::cerr << "Error receiving data.\n";
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Timeout
+                std::cout << "Connection timed out.\n";
+            } else {
+                std::cerr << "Error receiving data.\n";
+            }
             break;
         } else if (bytes_received == 0) {
             std::cout << "Client disconnected.\n";
             break;
         }
 
-        std::cout << "Received " << bytes_received << " bytes.\n";
+        std::string_view data_chunk(buffer.data(), bytes_received);
         
-        // Echo back to the client
-        ssize_t bytes_sent = ::send(client_socket->get(), buffer.data(), static_cast<size_t>(bytes_received), 0);
-        if (bytes_sent < 0) {
-            std::cerr << "Error sending data.\n";
-            break;
+        while (!data_chunk.empty()) {
+            // we could parse chunk by chunk, but parse() right now consumes all data
+            // To handle pipelined requests properly, parse() should return how many bytes it consumed.
+            // For now, we assume one request per recv(), or that parse will stop at Complete.
+            // Wait, our parser stops and returns Complete, but doesn't tell us how much it consumed!
+            // Actually, we pass the whole chunk. If there's extra data, it gets lost right now.
+            // For this milestone, we'll just parse the chunk.
+
+            auto result = parser.parse(data_chunk, req);
+
+            if (result == ParseResult::Complete) {
+                HttpResponse res = FileHandler::handle_request(req);
+                std::string res_str = res.serialize();
+
+                ssize_t bytes_sent = ::send(client_socket->get(), res_str.c_str(), res_str.size(), 0);
+                if (bytes_sent < 0) {
+                    std::cerr << "Error sending data.\n";
+                    keep_alive = false;
+                    break;
+                }
+
+                // Check keep-alive
+                keep_alive = false;
+                if (req.version == "HTTP/1.1") {
+                    keep_alive = true;
+                    auto it = req.headers.find("Connection");
+                    if (it != req.headers.end() && it->second == "close") {
+                        keep_alive = false;
+                    }
+                } else if (req.version == "HTTP/1.0") {
+                    auto it = req.headers.find("Connection");
+                    if (it != req.headers.end() && it->second == "keep-alive") {
+                        keep_alive = true;
+                    }
+                }
+
+                parser.reset();
+                req.clear();
+                break; // handled request, break out of data_chunk loop and wait for next recv
+            } else if (result == ParseResult::Error) {
+                std::cerr << "Parse error.\n";
+                // Send 400 Bad Request
+                HttpResponse res;
+                res.status_code = 400;
+                res.status_message = "Bad Request";
+                std::string res_str = res.serialize();
+                ::send(client_socket->get(), res_str.c_str(), res_str.size(), 0);
+                keep_alive = false;
+                break;
+            } else {
+                // Pending, need more data
+                break; // break data_chunk loop, go to next recv
+            }
         }
     }
 }

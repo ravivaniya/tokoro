@@ -12,6 +12,8 @@ void HttpParser::reset() {
     current_header_value_.clear();
     expected_body_length_ = 0;
     body_bytes_read_ = 0;
+    current_chunk_size_ = 0;
+    is_chunked_ = false;
 }
 
 bool HttpParser::is_char(char c) const {
@@ -113,13 +115,17 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                     auto it_te = req.headers.find("Transfer-Encoding");
                     if (it_te != req.headers.end()) {
                         if (it_te->second.find("chunked") != std::string::npos) {
-                            // Chunked encoding not yet supported
+                            is_chunked_ = true;
+                        } else {
                             state_ = ParseState::Error;
                             return ParseResult::Error;
                         }
                     }
 
-                    if (expected_body_length_ > 0) {
+                    if (is_chunked_) {
+                        state_ = ParseState::ChunkSize;
+                        current_chunk_size_ = 0;
+                    } else if (expected_body_length_ > 0) {
                         state_ = ParseState::Body;
                         req.body.reserve(expected_body_length_);
                     } else {
@@ -174,11 +180,76 @@ ParseResult HttpParser::parse(std::string_view data, HttpRequest& req) {
                 body_bytes_read_++;
                 if (body_bytes_read_ >= expected_body_length_) {
                     state_ = ParseState::Complete;
-                    // If there's more data in the view after body completes,
-                    // in a real pipelined server we'd return and let caller consume the rest.
-                    // For now, returning Complete is sufficient.
                     return ParseResult::Complete;
                 }
+                break;
+
+            case ParseState::ChunkSize:
+                if (c == '\r') {
+                    state_ = ParseState::ChunkSizeCRLF;
+                } else if (c == ';') {
+                    state_ = ParseState::ChunkExtension;
+                } else {
+                    int val = 0;
+                    if (c >= '0' && c <= '9') val = c - '0';
+                    else if (c >= 'a' && c <= 'f') val = c - 'a' + 10;
+                    else if (c >= 'A' && c <= 'F') val = c - 'A' + 10;
+                    else {
+                        state_ = ParseState::Error;
+                        return ParseResult::Error;
+                    }
+                    current_chunk_size_ = (current_chunk_size_ * 16) + val;
+                }
+                break;
+
+            case ParseState::ChunkExtension:
+                if (c == '\r') {
+                    state_ = ParseState::ChunkSizeCRLF;
+                }
+                break;
+
+            case ParseState::ChunkSizeCRLF:
+                if (c == '\n') {
+                    if (current_chunk_size_ == 0) {
+                        state_ = ParseState::ChunkTrailer;
+                    } else {
+                        state_ = ParseState::ChunkData;
+                        body_bytes_read_ = 0;
+                    }
+                } else {
+                    state_ = ParseState::Error;
+                    return ParseResult::Error;
+                }
+                break;
+
+            case ParseState::ChunkData:
+                req.body.push_back(static_cast<uint8_t>(c));
+                body_bytes_read_++;
+                if (body_bytes_read_ >= current_chunk_size_) {
+                    state_ = ParseState::ChunkDataCRLF;
+                }
+                break;
+
+            case ParseState::ChunkDataCRLF:
+                if (c == '\r') {
+                    // skip
+                } else if (c == '\n') {
+                    state_ = ParseState::ChunkSize;
+                    current_chunk_size_ = 0;
+                } else {
+                    state_ = ParseState::Error;
+                    return ParseResult::Error;
+                }
+                break;
+
+            case ParseState::ChunkTrailer:
+                if (c == '\r') {
+                    // skip
+                } else if (c == '\n') {
+                    state_ = ParseState::Complete;
+                    return ParseResult::Complete;
+                }
+                // Simplified trailer parsing, ignore trailer contents until \r\n
                 break;
 
             case ParseState::Complete:
