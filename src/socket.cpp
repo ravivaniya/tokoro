@@ -105,4 +105,15 @@ std::string Socket::get_peer_ip() const {
     return "";
 }
 
+uint16_t Socket::get_bound_port() const {
+    if (!is_valid()) return 0;
+
+    sockaddr_in addr{};
+    socklen_t len = sizeof(addr);
+    if (::getsockname(fd_, reinterpret_cast<sockaddr*>(&addr), &len) == -1) {
+        return 0;
+    }
+    return ntohs(addr.sin_port);
+}
+
 } // namespace tokoro

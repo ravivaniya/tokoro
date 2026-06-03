@@ -30,3 +30,108 @@ jobs:
     - name: Test
       working-directory: ${{github.workspace}}/build
       run: ctest -C ${{matrix.build_type}} --output-on-failure
+
+  tsan:
+    name: ThreadSanitizer (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=Debug -DTOKORO_WERROR=ON -DTOKORO_USE_TSAN=ON
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config Debug
+
+    - name: Test
+      working-directory: ${{github.workspace}}/build
+      run: ctest -C Debug --output-on-failure
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install gcovr
+      run: sudo apt-get install -y gcovr
+
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=Debug -DTOKORO_ENABLE_COVERAGE=ON
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config Debug
+
+    - name: Test
+      working-directory: ${{github.workspace}}/build
+      run: ctest -C Debug --output-on-failure
+
+    - name: Generate Coverage Report
+      run: gcovr -r ${{github.workspace}} --fail-under-line 85
+
+  static-analysis:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Tools
+      run: sudo apt-get update && sudo apt-get install -y clang-tidy cppcheck
+
+    - name: Configure CMake (Export compile commands)
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+    - name: Run clang-tidy
+      run: |
+        find src -name "*.cpp" -o -name "*.hpp" | xargs clang-tidy -p ${{github.workspace}}/build --warnings-as-errors=*
+
+    - name: Run cppcheck
+      run: cppcheck --enable=all --error-exitcode=1 --suppress=missingIncludeSystem -I src src/
+
+  fuzzer:
+    name: Fuzz Testing (30s)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Configure CMake
+      env:
+        CC: clang
+        CXX: clang++
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=Debug -DTOKORO_ENABLE_FUZZER=ON
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --target tokoro_fuzzer
+
+    - name: Run Fuzzer
+      working-directory: ${{github.workspace}}/build
+      run: ./tokoro_fuzzer -max_total_time=30
+
+  valgrind:
+    name: Valgrind Leak Check
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Valgrind
+      run: sudo apt-get update && sudo apt-get install -y valgrind
+
+    - name: Configure CMake
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build
+
+    - name: Test with Valgrind
+      working-directory: ${{github.workspace}}/build
+      run: valgrind --leak-check=full --error-exitcode=1 ctest

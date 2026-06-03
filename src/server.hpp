@@ -17,6 +17,9 @@ public:
     // Starts the single-threaded accept loop
     void run(std::atomic<bool>& running);
 
+    // Get the bound port (useful if configured with port 0)
+    uint16_t get_port() const { return server_socket_.get_bound_port(); }
+
 private:
     void handle_client(Socket client_socket);
 

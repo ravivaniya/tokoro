@@ -33,8 +33,15 @@ endif()
 set(DEBUG_FLAGS
     -g
     -fno-omit-frame-pointer
-    -fsanitize=address,undefined
 )
+option(TOKORO_USE_TSAN "Use ThreadSanitizer instead of ASan/UBSan" OFF)
+if(TOKORO_USE_TSAN)
+    list(APPEND DEBUG_FLAGS -fsanitize=thread)
+    set(SANITIZER_LINK_FLAGS "-fsanitize=thread")
+else()
+    list(APPEND DEBUG_FLAGS -fsanitize=address,undefined)
+    set(SANITIZER_LINK_FLAGS "-fsanitize=address,undefined")
+endif()
 
 # Core library source files
 set(CORE_SOURCES
@@ -65,13 +72,13 @@ target_include_directories(tokoro_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/g
 add_dependencies(tokoro_core generate_version)
 
 target_compile_options(tokoro_core PRIVATE ${WARNING_FLAGS} "$<$<CONFIG:Debug>:${DEBUG_FLAGS}>")
-target_link_options(tokoro_core PRIVATE "$<$<CONFIG:Debug>:-fsanitize=address,undefined>")
+target_link_options(tokoro_core PRIVATE "$<$<CONFIG:Debug>:${SANITIZER_LINK_FLAGS}>")
 
 # Main executable
 add_executable(tokoro src/main.cpp)
 target_link_libraries(tokoro PRIVATE tokoro_core)
 target_compile_options(tokoro PRIVATE ${WARNING_FLAGS} "$<$<CONFIG:Debug>:${DEBUG_FLAGS}>")
-target_link_options(tokoro PRIVATE "$<$<CONFIG:Debug>:-fsanitize=address,undefined>")
+target_link_options(tokoro PRIVATE "$<$<CONFIG:Debug>:${SANITIZER_LINK_FLAGS}>")
 
 # Add testing support via Catch2
 include(FetchContent)
@@ -90,13 +97,41 @@ set(TEST_SOURCES
     tests/test_file_handler.cpp
     tests/test_thread_pool.cpp
     tests/test_socket.cpp
+    tests/test_integration.cpp
 )
 
 add_executable(tokoro_tests ${TEST_SOURCES})
 target_link_libraries(tokoro_tests PRIVATE tokoro_core Catch2::Catch2WithMain)
 target_compile_options(tokoro_tests PRIVATE ${WARNING_FLAGS} "$<$<CONFIG:Debug>:${DEBUG_FLAGS}>")
-target_link_options(tokoro_tests PRIVATE "$<$<CONFIG:Debug>:-fsanitize=address,undefined>")
+target_link_options(tokoro_tests PRIVATE "$<$<CONFIG:Debug>:${SANITIZER_LINK_FLAGS}>")
 
 # Add tests
 include(Catch)
 catch_discover_tests(tokoro_tests)
+
+# Stress test executable
+add_executable(tokoro_stress_test tests/stress_test.cpp)
+target_link_libraries(tokoro_stress_test PRIVATE tokoro_core)
+target_compile_options(tokoro_stress_test PRIVATE ${WARNING_FLAGS} "$<$<CONFIG:Debug>:${DEBUG_FLAGS}>")
+target_link_options(tokoro_stress_test PRIVATE "$<$<CONFIG:Debug>:${SANITIZER_LINK_FLAGS}>")
+
+# Fuzzer executable
+option(TOKORO_ENABLE_FUZZER "Enable libFuzzer target (requires clang)" OFF)
+if(TOKORO_ENABLE_FUZZER)
+    add_executable(tokoro_fuzzer tests/fuzz_parser.cpp)
+    target_link_libraries(tokoro_fuzzer PRIVATE tokoro_core)
+    target_compile_options(tokoro_fuzzer PRIVATE ${WARNING_FLAGS} -fsanitize=fuzzer,address,undefined -g)
+    target_link_options(tokoro_fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
+endif()
+
+# Coverage
+option(TOKORO_ENABLE_COVERAGE "Enable code coverage reporting" OFF)
+if(TOKORO_ENABLE_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+        add_link_options(-fprofile-instr-generate -fcoverage-mapping)
+    else()
+        add_compile_options(--coverage)
+        add_link_options(--coverage)
+    endif()
+endif()

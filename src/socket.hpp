@@ -52,6 +52,9 @@ public:
     // Get the IP address of the peer
     std::string get_peer_ip() const;
 
+    // Get the local port the socket is bound to
+    uint16_t get_bound_port() const;
+
 private:
     int fd_{-1};
 };
