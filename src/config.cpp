@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <vector>
+#include "version.hpp"
 
 namespace tokoro {
 
@@ -32,10 +33,10 @@ std::optional<Config> Config::parse(int argc, char** argv) {
                       << "  --help, -h                    Print this help and exit\n";
             return std::nullopt;
         } else if (args[i] == "--version") {
-            std::cout << "tokoro/1.0\n";
+            std::cout << "tokoro version " << tokoro::VERSION << "\n";
             return std::nullopt;
         } else if (args[i] == "--port" && i + 1 < args.size()) {
-            cfg.port = std::stoi(std::string(args[++i]));
+            cfg.port = static_cast<uint16_t>(std::stoi(std::string(args[++i])));
         } else if (args[i] == "--bind" && i + 1 < args.size()) {
             cfg.bind_address = args[++i];
         } else if (args[i] == "--docroot" && i + 1 < args.size()) {

@@ -11,6 +11,7 @@
 #include "file_handler.hpp"
 #include "logger.hpp"
 #include "metrics.hpp"
+#include "version.hpp"
 #include <random>
 #include <chrono>
 
@@ -122,7 +123,7 @@ void Server::handle_client(Socket client_socket) {
             break;
         }
 
-        std::string_view data_chunk(buffer.data(), bytes_received);
+        std::string_view data_chunk(buffer.data(), static_cast<size_t>(bytes_received));
         
         while (!data_chunk.empty()) {
             auto start_time = std::chrono::steady_clock::now();
@@ -170,8 +171,8 @@ void Server::handle_client(Socket client_socket) {
                 std::string res_str = res.serialize();
 
                 ssize_t total_sent = 0;
-                while (total_sent < res_str.size()) {
-                    ssize_t bytes_sent = ::send(client_socket.get(), res_str.c_str() + total_sent, res_str.size() - total_sent, MSG_NOSIGNAL);
+                while (static_cast<size_t>(total_sent) < res_str.size()) {
+                    ssize_t bytes_sent = ::send(client_socket.get(), res_str.c_str() + total_sent, res_str.size() - static_cast<size_t>(total_sent), MSG_NOSIGNAL);
                     if (bytes_sent < 0) {
                         std::cerr << "Error sending data.\n";
                         keep_alive = false;
@@ -188,7 +189,7 @@ void Server::handle_client(Socket client_socket) {
                             ssize_t chunk_sent = 0;
                             ssize_t chunk_size = file.gcount();
                             while (chunk_sent < chunk_size) {
-                                ssize_t sent = ::send(client_socket.get(), file_buf + chunk_sent, chunk_size - chunk_sent, MSG_NOSIGNAL);
+                                ssize_t sent = ::send(client_socket.get(), file_buf + chunk_sent, static_cast<size_t>(chunk_size - chunk_sent), MSG_NOSIGNAL);
                                 if (sent < 0) {
                                     keep_alive = false;
                                     break;
@@ -208,13 +209,13 @@ void Server::handle_client(Socket client_socket) {
                 auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
                 auto duration_sec = std::chrono::duration<double>(end_time - start_time).count();
                 Metrics::instance().observe_request_duration(duration_sec);
-                Metrics::instance().add_response_size_bytes(total_sent);
+                Metrics::instance().add_response_size_bytes(static_cast<uint64_t>(total_sent));
                 
                 std::string ua;
                 auto ua_it = req.headers.find("User-Agent");
                 if (ua_it != req.headers.end()) ua = ua_it->second;
                 
-                Logger::instance().access(req.method, req.uri, res.status_code, total_sent, duration_ms, client_ip, ua, req_id);
+                Logger::instance().access(req.method, req.uri, res.status_code, static_cast<size_t>(total_sent), static_cast<size_t>(duration_ms), client_ip, ua, req_id);
 
                 parser.reset();
                 req.clear();
@@ -229,16 +230,16 @@ void Server::handle_client(Socket client_socket) {
                 res.status_code = 400;
                 res.status_message = "Bad Request";
                 res.headers["Connection"] = "close";
-                res.headers["Server"] = "tokoro/1.0";
+                res.headers["Server"] = std::string("tokoro/") + tokoro::VERSION;
                 
                 std::string res_str = res.serialize();
                 ssize_t total_sent = 0;
-                while (total_sent < res_str.size()) {
-                    ssize_t bytes_sent = ::send(client_socket.get(), res_str.c_str() + total_sent, res_str.size() - total_sent, MSG_NOSIGNAL);
+                while (static_cast<size_t>(total_sent) < res_str.size()) {
+                    ssize_t bytes_sent = ::send(client_socket.get(), res_str.c_str() + total_sent, res_str.size() - static_cast<size_t>(total_sent), MSG_NOSIGNAL);
                     if (bytes_sent < 0) break;
                     total_sent += bytes_sent;
                 }
-                Metrics::instance().add_response_size_bytes(total_sent);
+                Metrics::instance().add_response_size_bytes(static_cast<uint64_t>(total_sent));
                 keep_alive = false;
                 break;
             } else {

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <ctime>
 #include "metrics.hpp"
+#include "version.hpp"
 
 namespace tokoro {
 
@@ -48,7 +49,7 @@ HttpResponse FileHandler::handle_request(const HttpRequest& req, const fs::path&
     gmtime_r(&t, &tm_info);
     strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &tm_info);
     res.headers["Date"] = std::string(date_buf);
-    res.headers["Server"] = "tokoro/1.0";
+    res.headers["Server"] = std::string("tokoro/") + tokoro::VERSION;
 
     if (req.method != "GET") {
         res.status_code = 405;

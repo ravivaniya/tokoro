@@ -232,7 +232,7 @@ std::pair<ParseResult, size_t> HttpParser::parse(std::string_view data, HttpRequ
                         state_ = ParseState::Error;
                         return {ParseResult::Error, i + 1};
                     }
-                    current_chunk_size_ = (current_chunk_size_ * 16) + val;
+                    current_chunk_size_ = (current_chunk_size_ * 16) + static_cast<size_t>(val);
                 }
                 break;
 

@@ -8,6 +8,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Enable compile_commands.json for clang-tidy/clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(TOKORO_WERROR "Treat warnings as errors" OFF)
+
 # Strict warnings
 set(WARNING_FLAGS 
     -Wall 
@@ -23,6 +25,9 @@ set(WARNING_FLAGS
     -Wconversion 
     -Wsign-conversion
 )
+if(TOKORO_WERROR)
+    list(APPEND WARNING_FLAGS -Werror)
+endif()
 
 # Debug build flags with sanitizers
 set(DEBUG_FLAGS
@@ -31,14 +36,8 @@ set(DEBUG_FLAGS
     -fsanitize=address,undefined
 )
 
-add_compile_options("$<$<CONFIG:Debug>:${DEBUG_FLAGS}>")
-add_link_options("$<$<CONFIG:Debug>:-fsanitize=address,undefined>")
-
-add_compile_options(${WARNING_FLAGS})
-
-# Add source files
-set(SOURCES
-    src/main.cpp
+# Core library source files
+set(CORE_SOURCES
     src/socket.cpp
     src/server.cpp
     src/thread_pool.cpp
@@ -49,8 +48,30 @@ set(SOURCES
     src/metrics.cpp
 )
 
-add_executable(tokoro ${SOURCES})
-target_include_directories(tokoro PRIVATE src)
+# Git version generation
+set(VERSION_FILE "${CMAKE_CURRENT_BINARY_DIR}/generated/version.hpp")
+add_custom_target(
+    generate_version ALL
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DBIN_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -DDEFAULT_VERSION=${PROJECT_VERSION}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/git_version.cmake
+    BYPRODUCTS ${VERSION_FILE}
+)
+
+add_library(tokoro_core STATIC ${CORE_SOURCES})
+target_include_directories(tokoro_core PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_dependencies(tokoro_core generate_version)
+
+target_compile_options(tokoro_core PRIVATE ${WARNING_FLAGS} "$<$<CONFIG:Debug>:${DEBUG_FLAGS}>")
+target_link_options(tokoro_core PRIVATE "$<$<CONFIG:Debug>:-fsanitize=address,undefined>")
+
+# Main executable
+add_executable(tokoro src/main.cpp)
+target_link_libraries(tokoro PRIVATE tokoro_core)
+target_compile_options(tokoro PRIVATE ${WARNING_FLAGS} "$<$<CONFIG:Debug>:${DEBUG_FLAGS}>")
+target_link_options(tokoro PRIVATE "$<$<CONFIG:Debug>:-fsanitize=address,undefined>")
 
 # Add testing support via Catch2
 include(FetchContent)
@@ -58,6 +79,7 @@ FetchContent_Declare(
   Catch2
   GIT_REPOSITORY https://github.com/catchorg/Catch2.git
   GIT_TAG        v3.4.0
+  GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(Catch2)
 
@@ -68,17 +90,12 @@ set(TEST_SOURCES
     tests/test_file_handler.cpp
     tests/test_thread_pool.cpp
     tests/test_socket.cpp
-    src/http_parser.cpp
-    src/file_handler.cpp
-    src/thread_pool.cpp
-    src/socket.cpp
-    src/logger.cpp
-    src/metrics.cpp
 )
 
 add_executable(tokoro_tests ${TEST_SOURCES})
-target_include_directories(tokoro_tests PRIVATE src)
-target_link_libraries(tokoro_tests PRIVATE Catch2::Catch2WithMain)
+target_link_libraries(tokoro_tests PRIVATE tokoro_core Catch2::Catch2WithMain)
+target_compile_options(tokoro_tests PRIVATE ${WARNING_FLAGS} "$<$<CONFIG:Debug>:${DEBUG_FLAGS}>")
+target_link_options(tokoro_tests PRIVATE "$<$<CONFIG:Debug>:-fsanitize=address,undefined>")
 
 # Add tests
 include(Catch)
