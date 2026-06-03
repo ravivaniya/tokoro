@@ -43,7 +43,19 @@ The HTTP/1.1 parser is designed as an incremental state machine to accommodate n
 The parser will be developed using Test-Driven Development (TDD) to ensure strict adherence to RFC 7230 §3 and §4.
 
 ## 4. Keep-Alive & Timeouts (Phase 1)
-*(To be written)*
+Tokoro implements persistent connections (HTTP Keep-Alive) by default for HTTP/1.1 requests to minimize TCP handshake overhead.
+
+### Connection Lifecycle
+- A connection remains open after a response is sent unless the client specifies `Connection: close`, or the server determines it must close the connection (e.g., due to a protocol violation, or shutting down).
+- The `HttpParser` state resets upon completion, and the worker attempts to read the next request on the same socket buffer.
+
+### Timeout Categories
+To defend against slowloris attacks and manage resources efficiently, Tokoro enforces three distinct timeouts:
+1. **Header Timeout**: Maximum time allowed to read the complete HTTP request headers (e.g., 5 seconds). If the deadline passes without seeing the `\r\n\r\n` terminator, the connection is dropped.
+2. **Body Timeout**: Maximum time allowed to read the complete request body (e.g., 30 seconds).
+3. **Idle Keep-Alive Timeout**: Maximum time the server will wait for a new request on an idle keep-alive connection before closing it (e.g., 60 seconds).
+
+Enforcement of these timeouts ensures that stale or maliciously slow connections do not exhaust the thread pool or file descriptors.
 
 ## 5. Phase 2: Routing — prefix-hash, token estimation, hybrid policy
 *(To be written)*

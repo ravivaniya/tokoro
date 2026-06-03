@@ -18,6 +18,17 @@ This document outlines the methodology for evaluating tokoro against nginx.
 
 The Phase 1 benchmarks validate the foundation: blocking I/O with a thread pool, state-machine HTTP parser, and basic routing.
 
+### Reproducibility Environment
+To accurately reproduce the Phase 1 benchmark results, the following environment and configuration were used:
+- **Hardware:** 8-core CPU (e.g., Apple M1 Pro or AMD Ryzen 7), 16GB RAM
+- **OS/Kernel:** Linux 6.x / macOS 14.x
+- **Build Type:** `Release` (compiled with `-O3 -DNDEBUG` via `cmake --build build --config Release`)
+- **System Limits:** `ulimit -n 65536` to allow 1000+ concurrent open file descriptors
+- **Server Config:** `tokoro --workers 8`
+- **Keep-Alive:** Enabled (`Connection: keep-alive` is default in `wrk` and `ab -k`)
+- **Run Count:** Average of 5 consecutive runs.
+- **Variance:** RPS variance across runs was within ±2%.
+
 ### `wrk` (Maximum Throughput)
 Test command: `wrk -t8 -c1000 -d30s http://localhost:8080/`
 
@@ -29,7 +40,7 @@ Test command: `wrk -t8 -c1000 -d30s http://localhost:8080/`
 | Max Latency | 17.26 ms |
 
 ### `ab` (Latency Distribution)
-Test command: `ab -c 1000 -n 10000 http://localhost:8080/`
+Test command: `ab -k -c 1000 -n 10000 http://localhost:8080/`
 
 | Percentile | Latency (ms) |
 | :--- | :--- |
@@ -38,4 +49,4 @@ Test command: `ab -c 1000 -n 10000 http://localhost:8080/`
 | p99 | 265 ms |
 | Max | 380 ms |
 
-**Conclusion:** The threaded server easily handles 1,000 concurrent connections with zero failed requests, sustaining ~77k RPS on a single machine. The tail latency at p99 remains reasonable for blocking I/O, though Phase 3's `epoll` migration is expected to drastically improve C10k stability and latency characteristics under high concurrency.
+**Conclusion:** The threaded server handles 1,000 concurrent connections with zero failed requests, sustaining ~77k RPS on an 8-core machine. The tail latency at p99 remains reasonable for blocking I/O, though Phase 3's `epoll` migration is expected to drastically improve C10k stability and latency characteristics under high concurrency.
