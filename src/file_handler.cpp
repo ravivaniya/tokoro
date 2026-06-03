@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <iostream>
 #include <ctime>
+#include "metrics.hpp"
 
 namespace tokoro {
 
@@ -54,6 +55,24 @@ HttpResponse FileHandler::handle_request(const HttpRequest& req, const fs::path&
         res.status_message = "Method Not Allowed";
         res.headers["Allow"] = "GET";
         res.body = std::vector<uint8_t>{'4', '0', '5', ' ', 'M', 'e', 't', 'h', 'o', 'd', ' ', 'N', 'o', 't', ' ', 'A', 'l', 'l', 'o', 'w', 'e', 'd'};
+        return res;
+    }
+
+    if (req.uri == "/healthz" || req.uri == "/readyz") {
+        res.status_code = 200;
+        res.status_message = "OK";
+        res.headers["Content-Type"] = "text/plain";
+        std::string body = "OK";
+        res.body = std::vector<uint8_t>(body.begin(), body.end());
+        return res;
+    }
+
+    if (req.uri == "/metrics") {
+        res.status_code = 200;
+        res.status_message = "OK";
+        res.headers["Content-Type"] = "text/plain";
+        std::string metrics_str = Metrics::instance().to_prometheus_string();
+        res.body = std::vector<uint8_t>(metrics_str.begin(), metrics_str.end());
         return res;
     }
 

@@ -49,6 +49,9 @@ public:
     // Enables SO_REUSEADDR
     bool set_reuse_address(bool reuse = true);
 
+    // Get the IP address of the peer
+    std::string get_peer_ip() const;
+
 private:
     int fd_{-1};
 };

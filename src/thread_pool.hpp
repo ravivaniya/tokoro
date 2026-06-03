@@ -25,6 +25,9 @@ public:
     // Enqueue a task
     void enqueue(std::function<void()> task);
 
+    // Returns the current number of tasks in the queue
+    size_t queue_depth() const;
+
 private:
     void worker_loop();
 

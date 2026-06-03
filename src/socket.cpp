@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cerrno>
 #include <sys/types.h>
+#include <arpa/inet.h>
 
 namespace tokoro {
 
@@ -86,6 +87,22 @@ std::optional<Socket> Socket::accept() {
     }
 
     return Socket(client_fd);
+}
+
+std::string Socket::get_peer_ip() const {
+    if (!is_valid()) return "";
+
+    sockaddr_in addr{};
+    socklen_t len = sizeof(addr);
+    if (::getpeername(fd_, reinterpret_cast<sockaddr*>(&addr), &len) == -1) {
+        return "";
+    }
+
+    char ip_str[INET_ADDRSTRLEN];
+    if (inet_ntop(AF_INET, &addr.sin_addr, ip_str, sizeof(ip_str)) != nullptr) {
+        return std::string(ip_str);
+    }
+    return "";
 }
 
 } // namespace tokoro

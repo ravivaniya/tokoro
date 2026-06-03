@@ -9,6 +9,10 @@
 #include <fstream>
 #include "http_parser.hpp"
 #include "file_handler.hpp"
+#include "logger.hpp"
+#include "metrics.hpp"
+#include <random>
+#include <chrono>
 
 namespace tokoro {
 
@@ -18,6 +22,10 @@ Server::Server(const Config& config)
     if (!server_socket_.is_valid()) {
         throw std::runtime_error("Failed to create server socket.");
     }
+
+    Metrics::instance().set_queue_depth_callback([pool = thread_pool_.get()]() {
+        return pool->queue_depth();
+    });
 
     if (!server_socket_.set_reuse_address(true)) {
         throw std::runtime_error("Failed to set SO_REUSEADDR.");
@@ -31,7 +39,7 @@ Server::Server(const Config& config)
         throw std::runtime_error("Failed to listen on server socket.");
     }
 
-    std::cout << "Server initialized and listening on port " << config_.port << "...\n";
+    Logger::instance().info("Server initialized and listening on port " + std::to_string(config_.port) + "...");
 }
 
 void Server::run(std::atomic<bool>& running) {
@@ -74,6 +82,17 @@ void Server::run(std::atomic<bool>& running) {
 }
 
 void Server::handle_client(Socket client_socket) {
+    struct ActiveConnGuard {
+        ActiveConnGuard() { Metrics::instance().inc_active_connections(); }
+        ~ActiveConnGuard() { Metrics::instance().dec_active_connections(); }
+    } conn_guard;
+
+    std::string client_ip = client_socket.get_peer_ip();
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<uint32_t> dist;
+
     auto set_timeout = [&](size_t ms) {
         struct timeval tv;
         tv.tv_sec = ms / 1000;
@@ -106,11 +125,26 @@ void Server::handle_client(Socket client_socket) {
         std::string_view data_chunk(buffer.data(), bytes_received);
         
         while (!data_chunk.empty()) {
+            auto start_time = std::chrono::steady_clock::now();
             auto [result, bytes_consumed] = parser.parse(data_chunk, req);
+            Metrics::instance().add_request_size_bytes(bytes_consumed);
             data_chunk = data_chunk.substr(bytes_consumed);
 
             if (result == ParseResult::Complete) {
+                Metrics::instance().inc_requests_total();
+
+                std::string req_id;
+                auto rid_it = req.headers.find("X-Request-Id");
+                if (rid_it != req.headers.end()) {
+                    req_id = rid_it->second;
+                } else {
+                    char buf[17];
+                    snprintf(buf, sizeof(buf), "%08x%08x", dist(gen), dist(gen));
+                    req_id = buf;
+                }
+
                 HttpResponse res = FileHandler::handle_request(req, config_.docroot);
+                res.headers["X-Request-Id"] = req_id;
                 
                 // Determine keep-alive
                 keep_alive = false;
@@ -170,13 +204,26 @@ void Server::handle_client(Socket client_socket) {
                 
                 if (!keep_alive) break;
 
+                auto end_time = std::chrono::steady_clock::now();
+                auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+                auto duration_sec = std::chrono::duration<double>(end_time - start_time).count();
+                Metrics::instance().observe_request_duration(duration_sec);
+                Metrics::instance().add_response_size_bytes(total_sent);
+                
+                std::string ua;
+                auto ua_it = req.headers.find("User-Agent");
+                if (ua_it != req.headers.end()) ua = ua_it->second;
+                
+                Logger::instance().access(req.method, req.uri, res.status_code, total_sent, duration_ms, client_ip, ua, req_id);
+
                 parser.reset();
                 req.clear();
                 // Switch to keep-alive idle timeout
                 set_timeout(config_.keepalive_timeout_ms);
                 continue;
             } else if (result == ParseResult::Error) {
-                std::cerr << "Parse error.\n";
+                Metrics::instance().inc_parse_errors_total();
+                Logger::instance().error("Parse error on client " + client_ip);
                 // Send 400 Bad Request
                 HttpResponse res;
                 res.status_code = 400;
@@ -191,6 +238,7 @@ void Server::handle_client(Socket client_socket) {
                     if (bytes_sent < 0) break;
                     total_sent += bytes_sent;
                 }
+                Metrics::instance().add_response_size_bytes(total_sent);
                 keep_alive = false;
                 break;
             } else {

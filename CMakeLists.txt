@@ -45,6 +45,8 @@ set(SOURCES
     src/http_parser.cpp
     src/file_handler.cpp
     src/config.cpp
+    src/logger.cpp
+    src/metrics.cpp
 )
 
 add_executable(tokoro ${SOURCES})
@@ -70,6 +72,8 @@ set(TEST_SOURCES
     src/file_handler.cpp
     src/thread_pool.cpp
     src/socket.cpp
+    src/logger.cpp
+    src/metrics.cpp
 )
 
 add_executable(tokoro_tests ${TEST_SOURCES})

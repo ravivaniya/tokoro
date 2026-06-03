@@ -22,13 +22,18 @@ ThreadPool::~ThreadPool() {
 
 void ThreadPool::enqueue(std::function<void()> task) {
     {
-        std::lock_guard<std::mutex> lock(queue_mutex_);
+        std::unique_lock<std::mutex> lock(queue_mutex_);
         if (stop_) {
-            throw std::runtime_error("ThreadPool is stopped, cannot enqueue new tasks.");
+            throw std::runtime_error("enqueue on stopped ThreadPool");
         }
         tasks_.push(std::move(task));
     }
     condition_.notify_one();
+}
+
+size_t ThreadPool::queue_depth() const {
+    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(queue_mutex_));
+    return tasks_.size();
 }
 
 void ThreadPool::worker_loop() {
