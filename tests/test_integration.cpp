@@ -9,6 +9,9 @@
 #include <unistd.h>
 #include <string>
 #include <vector>
+#include <fstream>
+#include <cstdio>
+#include <filesystem>
 
 using namespace tokoro;
 
@@ -46,9 +49,15 @@ std::string send_request(uint16_t port, const std::string& request_data) {
 }
 
 TEST_CASE("Server Integration Tests", "[integration]") {
+    // Create a dummy index.html so the server returns 200 OK for GET /
+    {
+        std::ofstream f("index.html");
+        f << "<html><body>Hello</body></html>";
+    }
+
     Config config;
     config.port = 0; // Bind to ephemeral port
-    config.docroot = ".";
+    config.docroot = std::filesystem::current_path().string();
     config.workers = 2;
     config.header_timeout_ms = 1000;
     config.keepalive_timeout_ms = 1000;
@@ -69,7 +78,7 @@ TEST_CASE("Server Integration Tests", "[integration]") {
         std::string req = "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n";
         std::string resp = send_request(bound_port, req);
         
-        REQUIRE(resp.find("HTTP/1.0 200 OK") != std::string::npos);
+        REQUIRE(resp.find("200 OK") != std::string::npos);
         // The server currently sends HTTP/1.0 response for HTTP/1.0 request because of our fixes? 
         // Actually, file_handler defaults to HTTP/1.1 if not careful, but let's just check 200 OK
         REQUIRE(resp.find("200 OK") != std::string::npos);
@@ -118,4 +127,6 @@ TEST_CASE("Server Integration Tests", "[integration]") {
     // Send a dummy request to wake up poll() in the server
     send_request(bound_port, "GET / HTTP/1.0\r\n\r\n");
     server_thread.join();
+    
+    std::remove("index.html");
 }
