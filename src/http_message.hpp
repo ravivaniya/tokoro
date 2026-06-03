@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
+#include <ctime>
+#include "version.hpp"
 
 namespace tokoro {
 
@@ -30,8 +32,23 @@ struct HttpResponse {
     std::unordered_map<std::string, std::string> headers;
     std::vector<uint8_t> body;
     std::string file_path_to_send; // If set, body is empty and this file should be streamed
+    size_t file_offset = 0;
+    size_t file_size_to_send = 0;
+    bool omit_body = false;
 
-    std::string serialize_headers() const {
+    std::string serialize_headers() {
+        if (headers.find("Date") == headers.end()) {
+            char date_buf[128];
+            time_t t = time(NULL);
+            struct tm tm_info;
+            gmtime_r(&t, &tm_info);
+            strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &tm_info);
+            headers["Date"] = std::string(date_buf);
+        }
+        if (headers.find("Server") == headers.end()) {
+            headers["Server"] = std::string("tokoro/") + tokoro::VERSION;
+        }
+
         std::string result;
         result += version + " " + std::to_string(status_code) + " " + status_message + "\r\n";
         for (const auto& [key, value] : headers) {
@@ -49,9 +66,9 @@ struct HttpResponse {
         return result;
     }
 
-    std::string serialize() const {
+    std::string serialize() {
         std::string result = serialize_headers();
-        if (file_path_to_send.empty()) {
+        if (!omit_body && file_path_to_send.empty()) {
             result.append(reinterpret_cast<const char*>(body.data()), body.size());
         }
         return result;

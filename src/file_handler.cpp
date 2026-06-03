@@ -43,20 +43,25 @@ std::string url_decode(const std::string& src) {
 HttpResponse FileHandler::handle_request(const HttpRequest& req, const fs::path& docroot) {
     HttpResponse res;
 
-    char date_buf[128];
-    time_t t = time(NULL);
-    struct tm tm_info;
-    gmtime_r(&t, &tm_info);
-    strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &tm_info);
-    res.headers["Date"] = std::string(date_buf);
-    res.headers["Server"] = std::string("tokoro/") + tokoro::VERSION;
+    if (req.method == "OPTIONS") {
+        res.status_code = 200;
+        res.status_message = "OK";
+        res.headers["Allow"] = "GET, HEAD, OPTIONS";
+        res.headers["Content-Length"] = "0";
+        res.omit_body = true;
+        return res;
+    }
 
-    if (req.method != "GET") {
+    if (req.method != "GET" && req.method != "HEAD") {
         res.status_code = 405;
         res.status_message = "Method Not Allowed";
-        res.headers["Allow"] = "GET";
+        res.headers["Allow"] = "GET, HEAD, OPTIONS";
         res.body = std::vector<uint8_t>{'4', '0', '5', ' ', 'M', 'e', 't', 'h', 'o', 'd', ' ', 'N', 'o', 't', ' ', 'A', 'l', 'l', 'o', 'w', 'e', 'd'};
         return res;
+    }
+
+    if (req.method == "HEAD") {
+        res.omit_body = true;
     }
 
     if (req.uri == "/healthz" || req.uri == "/readyz") {
@@ -117,9 +122,93 @@ HttpResponse FileHandler::handle_request(const HttpRequest& req, const fs::path&
     }
 
     auto file_size = fs::file_size(target_path);
+    auto mtime = fs::last_write_time(target_path);
+    auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(mtime - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
+    time_t tt = std::chrono::system_clock::to_time_t(sctp);
+
+    char date_buf[128];
+    struct tm tm_info;
+    gmtime_r(&tt, &tm_info);
+    strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &tm_info);
+    std::string last_modified(date_buf);
+
+    std::string etag = "\"" + std::to_string(tt) + "-" + std::to_string(file_size) + "\"";
+
+    res.headers["Last-Modified"] = last_modified;
+    res.headers["ETag"] = etag;
+
+    auto it_inm = req.headers.find("if-none-match");
+    if (it_inm != req.headers.end() && it_inm->second == etag) {
+        res.status_code = 304;
+        res.status_message = "Not Modified";
+        res.omit_body = true;
+        return res;
+    }
+
+    auto it_ims = req.headers.find("if-modified-since");
+    if (it_ims != req.headers.end() && it_ims->second == last_modified) {
+        res.status_code = 304;
+        res.status_message = "Not Modified";
+        res.omit_body = true;
+        return res;
+    }
+
+    size_t start = 0;
+    size_t end = file_size > 0 ? file_size - 1 : 0;
+    bool is_partial = false;
+    auto it_range = req.headers.find("range");
+    if (it_range != req.headers.end()) {
+        std::string range_str = it_range->second;
+        if (range_str.find("bytes=") == 0) {
+            std::string byte_range = range_str.substr(6);
+            size_t dash_pos = byte_range.find('-');
+            if (dash_pos != std::string::npos) {
+                std::string start_str = byte_range.substr(0, dash_pos);
+                std::string end_str = byte_range.substr(dash_pos + 1);
+                
+                try {
+                    if (start_str.empty() && !end_str.empty()) {
+                        size_t suffix_len = std::stoull(end_str);
+                        if (suffix_len > file_size) suffix_len = file_size;
+                        start = file_size > 0 ? file_size - suffix_len : 0;
+                        end = file_size > 0 ? file_size - 1 : 0;
+                    } else if (!start_str.empty()) {
+                        start = std::stoull(start_str);
+                        if (!end_str.empty()) {
+                            end = std::stoull(end_str);
+                        }
+                    }
+                    
+                    if (file_size > 0 && start >= file_size) {
+                        res.status_code = 416;
+                        res.status_message = "Range Not Satisfiable";
+                        res.headers["Content-Range"] = "bytes */" + std::to_string(file_size);
+                        res.omit_body = true;
+                        return res;
+                    } else if (file_size == 0) {
+                        is_partial = false;
+                    } else {
+                        if (end >= file_size) end = file_size - 1;
+                        is_partial = true;
+                    }
+                } catch (...) {
+                    is_partial = false;
+                }
+            }
+        }
+    }
+
+    if (is_partial) {
+        res.status_code = 206;
+        res.status_message = "Partial Content";
+        res.headers["Content-Range"] = "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(file_size);
+        file_size = end - start + 1;
+    } else {
+        res.status_code = 200;
+        res.status_message = "OK";
+    }
+
     res.headers["Content-Length"] = std::to_string(file_size);
-    res.status_code = 200;
-    res.status_message = "OK";
 
     std::string ext = target_path.extension().string();
     if (ext == ".html") {
@@ -136,17 +225,28 @@ HttpResponse FileHandler::handle_request(const HttpRequest& req, const fs::path&
         res.headers["Content-Type"] = "application/octet-stream";
     }
 
-    if (file_size > 1024 * 1024) { // Stream if larger than 1MB
-        res.file_path_to_send = target_path.string();
-    } else {
-        std::ifstream file(target_path, std::ios::binary);
-        if (!file) {
-            res.status_code = 500;
-            res.status_message = "Internal Server Error";
-            res.body = std::vector<uint8_t>{'5', '0', '0', ' ', 'I', 'n', 't', 'e', 'r', 'n', 'a', 'l', ' ', 'S', 'e', 'r', 'v', 'e', 'r', ' ', 'E', 'r', 'r', 'o', 'r'};
-            return res;
+    if (!res.omit_body) {
+        if (file_size > 1024 * 1024) { // Stream if larger than 1MB
+            res.file_path_to_send = target_path.string();
+            res.file_offset = start;
+            res.file_size_to_send = file_size;
+        } else {
+            std::ifstream file(target_path, std::ios::binary);
+            if (!file) {
+                res.status_code = 500;
+                res.status_message = "Internal Server Error";
+                res.body = std::vector<uint8_t>{'5', '0', '0', ' ', 'I', 'n', 't', 'e', 'r', 'n', 'a', 'l', ' ', 'S', 'e', 'r', 'v', 'e', 'r', ' ', 'E', 'r', 'r', 'o', 'r'};
+                return res;
+            }
+            if (is_partial && start > 0) {
+                file.seekg(static_cast<std::streamoff>(start));
+            }
+            std::vector<char> buffer(file_size);
+            if (file_size > 0) {
+                file.read(buffer.data(), static_cast<std::streamsize>(file_size));
+                res.body.assign(buffer.begin(), buffer.begin() + file.gcount());
+            }
         }
-        res.body = std::vector<uint8_t>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     }
 
     return res;

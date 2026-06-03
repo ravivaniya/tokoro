@@ -144,7 +144,39 @@ void Server::handle_client(Socket client_socket) {
                     req_id = buf;
                 }
 
-                HttpResponse res = FileHandler::handle_request(req, config_.docroot);
+                if (req.version != "HTTP/1.1" && req.version != "HTTP/1.0") {
+                    HttpResponse res;
+                    res.status_code = 505;
+                    res.status_message = "HTTP Version Not Supported";
+                    res.headers["Connection"] = "close";
+                    res.headers["X-Request-Id"] = req_id;
+                    res.omit_body = true;
+                    
+                    std::string res_str = res.serialize();
+                    ssize_t total_sent = 0;
+                    while (static_cast<size_t>(total_sent) < res_str.size()) {
+                        ssize_t bytes_sent = ::send(client_socket.get(), res_str.c_str() + total_sent, res_str.size() - static_cast<size_t>(total_sent), MSG_NOSIGNAL);
+                        if (bytes_sent < 0) break;
+                        total_sent += bytes_sent;
+                    }
+                    Metrics::instance().add_response_size_bytes(static_cast<uint64_t>(total_sent));
+                    auto end_time = std::chrono::steady_clock::now();
+                    auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+                    Logger::instance().access(req.method, req.uri, res.status_code, static_cast<size_t>(total_sent), static_cast<size_t>(duration_ms), client_ip, "", req_id);
+                    keep_alive = false;
+                    break;
+                }
+
+                HttpResponse res;
+                if (req.method == "OPTIONS" && req.uri == "*") {
+                    res.status_code = 200;
+                    res.status_message = "OK";
+                    res.headers["Allow"] = "GET, HEAD, OPTIONS";
+                    res.headers["Content-Length"] = "0";
+                    res.omit_body = true;
+                } else {
+                    res = FileHandler::handle_request(req, config_.docroot);
+                }
                 res.headers["X-Request-Id"] = req_id;
                 
                 // Determine keep-alive
@@ -184,8 +216,13 @@ void Server::handle_client(Socket client_socket) {
                 if (keep_alive && !res.file_path_to_send.empty()) {
                     std::ifstream file(res.file_path_to_send, std::ios::binary);
                     if (file) {
+                        file.seekg(static_cast<std::streamoff>(res.file_offset));
                         char file_buf[65536];
-                        while (file.read(file_buf, sizeof(file_buf)) || file.gcount() > 0) {
+                        size_t remaining_to_send = res.file_size_to_send > 0 ? res.file_size_to_send : std::string::npos;
+                        while (remaining_to_send > 0) {
+                            size_t to_read = std::min<size_t>(sizeof(file_buf), remaining_to_send);
+                            if (!file.read(file_buf, static_cast<std::streamsize>(to_read)) && file.gcount() == 0) break;
+                            
                             ssize_t chunk_sent = 0;
                             ssize_t chunk_size = file.gcount();
                             while (chunk_sent < chunk_size) {
@@ -195,6 +232,9 @@ void Server::handle_client(Socket client_socket) {
                                     break;
                                 }
                                 chunk_sent += sent;
+                            }
+                            if (remaining_to_send != std::string::npos) {
+                                remaining_to_send -= static_cast<size_t>(chunk_size);
                             }
                             if (!keep_alive) break;
                         }
@@ -230,7 +270,7 @@ void Server::handle_client(Socket client_socket) {
                 res.status_code = 400;
                 res.status_message = "Bad Request";
                 res.headers["Connection"] = "close";
-                res.headers["Server"] = std::string("tokoro/") + tokoro::VERSION;
+                res.omit_body = true;
                 
                 std::string res_str = res.serialize();
                 ssize_t total_sent = 0;
