@@ -33,7 +33,7 @@ std::string send_request(uint16_t port, const std::string& request_data) {
     while (true) {
         ssize_t bytes_read = ::recv(sock, buffer, sizeof(buffer), 0);
         if (bytes_read <= 0) break;
-        response.append(buffer, bytes_read);
+        response.append(buffer, static_cast<size_t>(bytes_read));
         // Basic check for end of headers + content-length or connection close
         if (response.find("\r\n\r\n") != std::string::npos) {
             // For these simple tests, we assume connection close or no body

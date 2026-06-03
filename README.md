@@ -26,7 +26,7 @@ graph TD
 ```
 
 ## Benchmarks (Phase 1)
-tokoro Phase 1 (raw HTTP/1.1) comfortably handles 1,000 concurrent connections, sustaining **~77,000 RPS** on Apple Silicon with a p99 latency of **~265ms** (using blocking I/O thread pool). See [docs/benchmarks.md](docs/benchmarks.md) for full methodology and results.
+tokoro Phase 1 (raw HTTP/1.1) comfortably handles 256+ concurrent connections, sustaining **~8,000 RPS** in a Linux environment with a p99 latency of **~37ms** (using blocking I/O thread pool). See [docs/phase1_benchmarks.md](docs/phase1_benchmarks.md) for full methodology and results.
 
 ## Capability Comparison vs nginx
 

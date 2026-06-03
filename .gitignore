@@ -28,3 +28,7 @@ compile_commands.json
 # Other generated files
 *.pyc
 __pycache__/
+
+# Benchmark payloads and scripts
+www/*.txt
+run_bench.sh

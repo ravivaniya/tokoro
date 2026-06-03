@@ -46,7 +46,7 @@ void worker_thread(uint16_t port, int num_requests, std::atomic<int>& successes,
         while (!headers_done) {
             ssize_t bytes_read = ::recv(sock, buffer, sizeof(buffer), 0);
             if (bytes_read <= 0) break;
-            response.append(buffer, bytes_read);
+            response.append(buffer, static_cast<size_t>(bytes_read));
             if (response.find("\r\n\r\n") != std::string::npos) {
                 headers_done = true;
             }
